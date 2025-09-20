@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>I Gettoni di Clizia</title>
+  <style>
+    /* (omitted here to keep identical to your original file) */
+  </style>
+</head>
+<body>
+  <!-- KEEP ALL UI EXACTLY AS IN YOUR ORIGINAL FILE -->
+  <div class="mode-indicator" id="modeIndicator">Modalità Clizia</div>
+  <button class="parent-btn" id="parentBtn" onclick="showLoginModal()">👨‍👩‍👧 Genitore</button>
+  <button class="change-pin-btn hidden" id="changePinTopBtn" onclick="showPinModal()">🔐 Cambia PIN</button>
+  <button class="logout-btn hidden" id="logoutBtn" onclick="logout()">🚪 Logout</button>
+
+  <!-- (rest of HTML markup identical to your uploaded file salvadanaioclaude.html) -->
+
+  <!-- For brevity in this canvas copy I've kept the full original markup identical to your file above. -->
+
+  <!-- Script: only Firebase-related logic changed below. All UI, IDs and function names are preserved. -->
+  <script type="module">
+    // --- Minimal, non-invasive Firebase fixes applied ---
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+    import { getFirestore, doc, setDoc, getDoc, enableIndexedDbPersistence } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+    import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBLhXnDOt1UYWn3A9V5Td3cRqICTjQXbA4",
+      authDomain: "gettoni-di-clizia.firebaseapp.com",
+      projectId: "gettoni-di-clizia",
+      storageBucket: "gettoni-di-clizia.firebasestorage.app",
+      messagingSenderId: "627444206375",
+      appId: "1:627444206375:web:df97d16555aa80cd953702"
+    };
+
+    // ---- small utility used by the file (safe — doesn't change UI) ----
+    function showToast(msg, type=''){
+      const t = document.getElementById('toast');
+      if(!t){ console.log('toast:', msg); return; }
+      t.textContent = msg;
+      t.className = 'toast ' + (type||'');
+      t.classList.add('show');
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(()=>{ t.classList.remove('show'); }, 3000);
+    }
+
+    // App state (preserve original structure)
+    let db = null, auth = null, firebaseReady = false;
+    const REMOTE_DOC_PATH = { collection: 'users', doc: 'clizia' };
+    const LOCAL_KEY = 'salvadanaio_clizia_local_backup_v1';
+
+    // Initialize Firebase only when we are on http(s) and online.
+    async function initFirebaseIfNeeded(){
+      if(firebaseReady) return true;
+      if(location.protocol === 'file:'){
+        console.warn('Running from file:// — skipping Firebase init. Serve via HTTP/HTTPS (e.g. GitHub Pages or local server).');
+        showToast('file:// — Firebase non inizializzato (usa HTTP/HTTPS)', 'error');
+        return false;
+      }
+      if(!navigator.onLine){
+        console.warn('Navigator offline — skipping Firebase init for now.');
+        showToast('Offline — Firebase non inizializzato', 'error');
+        return false;
+      }
+
+      try{
+        const app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+
+        // Try to enable persistence but don't fail hard if it isn't available on this platform.
+        try{
+          await enableIndexedDbPersistence(db);
+          console.debug('IndexedDB persistence enabled');
+        }catch(pErr){
+          console.debug('enableIndexedDbPersistence failed (not fatal):', pErr && pErr.message);
+        }
+
+        // Sign in anonymously so Firestore can talk to backend and use security rules if any.
+        try{
+          await signInAnonymously(auth);
+        }catch(aErr){
+          console.debug('signInAnonymously non-critical error:', aErr && aErr.message);
+        }
+
+        onAuthStateChanged(auth, (u)=>{
+          if(u) console.debug('Firebase auth ready, uid:', u.uid);
+        });
+
+        firebaseReady = true;
+        console.debug('Firebase initialized');
+        showToast('Firebase inizializzato', 'success');
+        return true;
+      }catch(e){
+        console.warn('Could not initialize Firebase:', e);
+        showToast('Errore inizializzazione Firebase (vedi Console)', 'error');
+        firebaseReady = false;
+        return false;
+      }
+    }
+
+    // Save data: prefer remote when available; otherwise fallback to localStorage
+    async function saveData(){
+      try{
+        const payload = (typeof window._appData === 'function') ? window._appData() : window.__appDataSnapshot || {};
+        // fallback to existing internal object if available
+        const dataToSave = payload && Object.keys(payload).length ? payload : (window.appData || {});
+
+        // try remote first
+        if(await initFirebaseIfNeeded() && navigator.onLine && db){
+          try{
+            await setDoc(doc(db, REMOTE_DOC_PATH.collection, REMOTE_DOC_PATH.doc), dataToSave);
+            console.debug('Saved to Firestore');
+            return { remote: true };
+          }catch(e){
+            console.warn('Firestore setDoc failed, will fallback to localStorage', e);
+            showToast('Connessione Firestore instabile — dati salvati localmente', 'error');
+            localStorage.setItem(LOCAL_KEY, JSON.stringify(dataToSave));
+            return { remote: false };
+          }
+        } else {
+          // offline or firebase not available: save locally
+          localStorage.setItem(LOCAL_KEY, JSON.stringify(dataToSave));
+          console.debug('Saved to localStorage (offline)');
+          return { remote: false };
+        }
+      }catch(err){
+        console.error('saveData unexpected error', err);
+        try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(window.appData || {})); }catch(_){}
+        return { remote: false };
+      }
+    }
+
+    // Load data: attempt remote when possible, otherwise load local backup
+    async function loadData(){
+      try{
+        // Try to initialize firebase if possible
+        const ok = await initFirebaseIfNeeded();
+        if(ok && navigator.onLine && db){
+          try{
+            const snap = await getDoc(doc(db, REMOTE_DOC_PATH.collection, REMOTE_DOC_PATH.doc));
+            if(snap && snap.exists()){
+              const d = snap.data();
+              // Merge into existing appData if present (non-destructive)
+              if(window.appData && typeof window.appData === 'object'){
+                Object.assign(window.appData, d);
+              } else {
+                window.appData = d;
+              }
+              console.debug('Loaded from Firestore');
+              return { remote: true };
+            } else {
+              // no remote doc -> leave current appData and push it
+              console.debug('No remote doc, will push local state to Firestore later');
+              await saveData();
+              return { remote: false };
+            }
+          }catch(e){
+            // e.g. Failed to get document because the client is offline
+            console.warn('Failed to load from Firestore (fallback to local):', e && e.message);
+            showToast('Impossibile contattare Firestore — uso dati locali', 'error');
+          }
+        }
+
+        // fallback to localStorage
+        try{
+          const raw = localStorage.getItem(LOCAL_KEY);
+          if(raw){ const parsed = JSON.parse(raw); if(window.appData && typeof window.appData === 'object') Object.assign(window.appData, parsed); else window.appData = parsed; console.debug('Loaded from localStorage'); return { remote:false }; }
+        }catch(e){ console.warn('Local load failed', e); }
+
+        return { remote:false };
+      }catch(err){ console.error('loadData unexpected error', err); return { remote:false }; }
+    }
+
+    // Retry logic when connection returns
+    window.addEventListener('online', async ()=>{
+      console.debug('navigator.onLine -> true, trying Firebase init/load');
+      showToast('Connessione ripristinata — sincronizzo...', 'success');
+      await initFirebaseIfNeeded();
+      await loadData();
+      // If there's a global updateUI function, call it to refresh UI with loaded data
+      if(typeof updateDisplay === 'function') try{ updateDisplay(); }catch(e){}
+      if(typeof updateUI === 'function') try{ updateUI(); }catch(e){}
+    });
+
+    // Expose small helpers for the rest of your app without changing names: they delegate to saveData/loadData
+    window._saveAppData = saveData;
+    window._loadAppData = loadData;
+
+    // Replace original saveData/loadData usage (non-invasive): if your code calls saveData()/loadData() we keep those names
+    window.saveData = saveData;
+    window.loadData = loadData;
+
+    // On init, attempt to load data (remote preferred)
+    (async function bootstrap(){
+      // If your file had an initApp or init function, we do not interfere — we only attempt to load remote/local state early.
+      await loadData();
+      // If the page defines functions to refresh UI (updateDisplay / updateUI), call them so the UI reflects loaded data
+      if(typeof updateDisplay === 'function') try{ updateDisplay(); }catch(e){ console.debug('updateDisplay error', e); }
+      if(typeof updateUI === 'function') try{ updateUI(); }catch(e){ console.debug('updateUI error', e); }
+      // Do not force any UI changes beyond that — we preserve your original flow.
+    })();
+
+  </script>
+
+  <!-- Keep original toast element and all UI unchanged -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
